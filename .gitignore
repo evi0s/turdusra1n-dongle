@@ -1,0 +1,17 @@
+build/
+.DS_Store
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+.claude/
+
+# Runtime resources (download from sep.lol)
+resource/kpf.bin
+resource/cpf.bin
+resource/sep_racer.bin
+resource/overlay.bin
+resource/union.bin
+resource/Pongo.bin
+resource/shellcode_a9.bin

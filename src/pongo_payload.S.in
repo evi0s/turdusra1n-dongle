@@ -1,0 +1,33 @@
+.section .rodata.pongo_payload, "a", %progbits
+.balign 16
+
+.global pongo_lz4_bin
+.type pongo_lz4_bin, %object
+pongo_lz4_bin:
+.incbin "@CMAKE_CURRENT_LIST_DIR@/resource/Pongo_lz4.bin"
+
+.global pongo_lz4_bin_end
+pongo_lz4_bin_end:
+.size pongo_lz4_bin, pongo_lz4_bin_end - pongo_lz4_bin
+
+.balign 16
+
+.global stage1_a9_8000_bin
+.type stage1_a9_8000_bin, %object
+stage1_a9_8000_bin:
+.incbin "@CMAKE_CURRENT_LIST_DIR@/resource/stage1_a9_8000.bin"
+
+.global stage1_a9_8000_bin_end
+stage1_a9_8000_bin_end:
+.size stage1_a9_8000_bin, stage1_a9_8000_bin_end - stage1_a9_8000_bin
+
+.balign 16
+
+.global stage1_a9_8003_bin
+.type stage1_a9_8003_bin, %object
+stage1_a9_8003_bin:
+.incbin "@CMAKE_CURRENT_LIST_DIR@/resource/stage1_a9_8003.bin"
+
+.global stage1_a9_8003_bin_end
+stage1_a9_8003_bin_end:
+.size stage1_a9_8003_bin, stage1_a9_8003_bin_end - stage1_a9_8003_bin
