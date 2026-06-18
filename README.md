@@ -77,7 +77,13 @@ SH1106 128x64 I2C OLED at address `0x3C`. Shows:
                         GP42
 ```
 
-## Building
+## Pre-built Firmware
+
+CI builds run automatically on every push/PR via GitHub Actions. Download the latest `tethered_booter.uf2` from the [Actions](../../actions) tab — no local toolchain needed.
+
+You still need to flash runtime resources separately (see [Flash Resources](#flash-resources) below).
+
+## Building from Source
 
 ### Prerequisites
 
@@ -112,8 +118,6 @@ make -j$(nproc)
 ```
 
 Output: `build/tethered_booter.uf2`
-
-CI builds run automatically on push/PR via GitHub Actions — download the latest `tethered_booter.uf2` from the Actions tab.
 
 ### Flash Firmware
 
