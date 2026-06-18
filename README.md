@@ -41,6 +41,10 @@ Performs the full tethered boot sequence autonomously: checkm8 exploit, PongoOS 
 | **Battery ADC** | GP42 | ADC channel 2, via 220K/220K voltage divider |
 | **PSRAM CS** | GP47 | QMI CS1 |
 
+### Power
+
+A lithium battery charge/boost converter module is required to manage charging and boost the Li-ion cell output to 5V for the USB VBUS (to power the iPhone in DFU mode).
+
 ### Battery Monitoring
 
 Li-ion battery connected via a 220K/220K resistive voltage divider to GP42 (ADC2). The ADC reads half the battery voltage; firmware applies a calibrated multiplier to compensate for the high-impedance source.
@@ -63,7 +67,7 @@ SH1106 128x64 I2C OLED at address `0x3C`. Shows:
     UART  TX -| GP30      |
     UART  RX -| GP29      |
     Batt ADC -| GP42      |
-              |       USB |-- iPhone (USB-A, host mode)
+              |       USB |-- iPhone (host mode) / PC or Mac (MSC mode)
               +-----------+
 
     Battery ----[220K]----+----[220K]---- GND
