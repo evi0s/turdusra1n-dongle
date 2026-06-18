@@ -4,6 +4,8 @@ A checkm8 tethered boot dongle for A9 iPhones (iPhone 6s/6s+/SE 1st gen) built o
 
 Performs the full tethered boot sequence autonomously: checkm8 exploit, PongoOS upload, kernel patchfinder, SEP exploit, and XNU boot — no computer required.
 
+Demo on [reddit](https://www.reddit.com/r/LegacyJailbreak/comments/1u719e4/i_made_a_tethered_boot_dongle/)
+
 > [!WARNING]
 > Vibe-coded, use at your own risk!
 > 
