@@ -1,0 +1,27 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - id: build
+        uses: samyarsadat/Pico-Build-Action@v1
+        with:
+          source_dir: "."
+          output_ext: "*.uf2"
+          cmake_args: "-DCMAKE_BUILD_TYPE=Release"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tethered_booter
+          path: ${{steps.build.outputs.output_dir}}

@@ -113,6 +113,8 @@ make -j$(nproc)
 
 Output: `build/tethered_booter.uf2`
 
+CI builds run automatically on push/PR via GitHub Actions — download the latest `tethered_booter.uf2` from the Actions tab.
+
 ### Flash Firmware
 
 1. Hold BOOTSEL on the RP2350B and connect to PC via USB
