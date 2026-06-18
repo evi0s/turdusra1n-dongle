@@ -296,7 +296,7 @@ void oled_sh1106_draw_status(void) {
     if (status.cpid != 0) {
         snprintf(line_cpid, sizeof(line_cpid), "CPID:%04X", status.cpid);
     } else {
-        snprintf(line_cpid, sizeof(line_cpid), "USB MSC ");
+        snprintf(line_cpid, sizeof(line_cpid), "USB Host");
     }
 
     if (status.ecid != 0) {
